@@ -77,8 +77,8 @@ It is an alternative to paid tools such as ApowerMirror, LonelyScreen, Reflector
 ## Run from source
 
 ```powershell
-git clone https://github.com/<you>/<repo>.git
-cd <repo>
+git clone https://github.com/teyboxv1/pane-iphone-mirror-windows.git
+cd pane-iphone-mirror-windows
 pip install -r requirements.txt
 python -m handset.server      # then open http://127.0.0.1:8765
 ```
