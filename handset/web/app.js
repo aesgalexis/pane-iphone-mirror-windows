@@ -22,6 +22,27 @@ const wifiPair = document.querySelector("#wifi-pair");
 const MIRROR_PAGE = "/mirror.html";
 const MIRROR_API = "/mirror";
 
+// The token is process-local and only readable by this same-origin UI.
+let paneTokenPromise = null;
+function paneToken() {
+  if (!paneTokenPromise) {
+    paneTokenPromise = fetch("/api/auth", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("Pane authorization unavailable.");
+        return response.json();
+      })
+      .then((data) => {
+        if (typeof data.token !== "string") throw new Error("Invalid Pane authorization response.");
+        return data.token;
+      })
+      .catch((error) => {
+        paneTokenPromise = null;
+        throw error;
+      });
+  }
+  return paneTokenPromise;
+}
+
 let selectedUdid = null;
 let screenTimer = 0;
 let transport = localStorage.getItem("handset-transport") === "wifi" ? "wifi" : "usb";
@@ -337,7 +358,7 @@ function row(label, value, ok) {
 }
 
 async function getJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: { "X-Pane-Token": await paneToken() } });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
   return body;
@@ -346,7 +367,7 @@ async function getJson(url) {
 async function postJson(url, payload) {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Pane-Token": await paneToken() },
     body: JSON.stringify(payload),
   });
   const body = await response.json();
@@ -394,7 +415,7 @@ async function mirrorPost(path, payload) {
   try {
     await fetch(`${MIRROR_API}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Pane-Token": await paneToken() },
       body: JSON.stringify(payload),
     });
   } catch (_) {}
