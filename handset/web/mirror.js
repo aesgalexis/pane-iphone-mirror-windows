@@ -1,4 +1,31 @@
 const MIRROR = "/mirror";
+
+// Mirroring runs in its own iframe and obtains its own same-origin request token.
+let paneTokenPromise = null;
+function paneToken() {
+  if (!paneTokenPromise) {
+    paneTokenPromise = fetch("/api/auth", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("Pane authorization unavailable.");
+        return response.json();
+      })
+      .then((data) => {
+        if (typeof data.token !== "string") throw new Error("Invalid Pane authorization response.");
+        return data.token;
+      })
+      .catch((error) => {
+        paneTokenPromise = null;
+        throw error;
+      });
+  }
+  return paneTokenPromise;
+}
+
+async function mirrorFetch(path, options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set("X-Pane-Token", await paneToken());
+  return mirrorFetch(path, { ...options, headers });
+}
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const statusEl = document.getElementById("mirror-status");
@@ -68,7 +95,7 @@ function touchCoords(e) {
 
 async function postJson(path, payload) {
   try {
-    await fetch(`${MIRROR}${path}`, {
+    await mirrorFetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -240,7 +267,7 @@ async function fetchCodecWithRetry() {
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, delays[attempt - 1]));
     try {
-      const resp = await fetch(`${MIRROR}/codec`, { cache: "no-store" });
+      const resp = await mirrorFetch("/codec", { cache: "no-store" });
       if (!resp.ok) {
         lastErr = `HTTP ${resp.status}`;
         continue;
@@ -354,9 +381,9 @@ async function run(generation) {
         needsResync = true;
         if (!autoRestartUsed && frameCount < 5) {
           autoRestartUsed = true;
-          fetch(`${MIRROR}/restart`, { method: "POST", cache: "no-store" }).catch(() => {});
+          mirrorFetch("/restart", { method: "POST", cache: "no-store" }).catch(() => {});
         } else {
-          fetch(`${MIRROR}/pli`, { method: "POST", cache: "no-store" }).catch(() => {});
+          mirrorFetch("/pli", { method: "POST", cache: "no-store" }).catch(() => {});
         }
       },
     });
@@ -373,11 +400,11 @@ async function run(generation) {
       setStatus(`Waiting for video stream (retry ${a})…`);
       await new Promise((r) => setTimeout(r, streamDelays[a - 1]));
       if (a === 2) {
-        await fetch(`${MIRROR}/pli`, { method: "POST", cache: "no-store" }).catch(() => {});
+        await mirrorFetch("/pli", { method: "POST", cache: "no-store" }).catch(() => {});
       }
     }
     try {
-      const r = await fetch(`${MIRROR}/stream.bin`, { cache: "no-store" });
+      const r = await mirrorFetch("/stream.bin", { cache: "no-store" });
       if (r.ok) {
         resp = r;
         break;
