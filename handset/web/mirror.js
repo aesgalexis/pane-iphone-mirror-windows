@@ -24,7 +24,7 @@ function paneToken() {
 async function mirrorFetch(path, options = {}) {
   const headers = new Headers(options.headers);
   headers.set("X-Pane-Token", await paneToken());
-  return mirrorFetch(path, { ...options, headers });
+  return fetch(`${MIRROR}${path}`, { ...options, headers });
 }
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
