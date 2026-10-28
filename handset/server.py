@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlparse
 from handset.device import read_handset, snapshot
 from handset.mux import MuxError
 from handset.screen import restart_screen, screen_status, start_screen
+from handset.security import ACCESS_TOKEN, MAX_REQUEST_BODY, request_allowed
 from handset.wifi import pair_for_wifi, wifi_paired_udids
 
 ROOT = Path(__file__).resolve().parent / "web"
@@ -26,10 +27,44 @@ _CLIENT_GONE = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _authorize(self, *, token_required: bool) -> bool:
+        if request_allowed(self.headers, self.server.server_port, token_required=token_required):
+            return True
+        self._json({"error": "Request denied."}, status=403)
+        return False
+
+    def _request_body_length(self) -> int | None:
+        if self.headers.get("Transfer-Encoding"):
+            self._json({"error": "Chunked request bodies are not supported."}, status=400)
+            return None
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._json({"error": "Invalid Content-Length."}, status=400)
+            return None
+        if length < 0 or length > MAX_REQUEST_BODY:
+            self._json({"error": "Request body exceeds the size limit."}, status=413)
+            return None
+        return length
+
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        super().end_headers()
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        protected = path.startswith("/api/") and path != "/api/auth"
+        protected = protected or path == MIRROR_PREFIX or path.startswith(f"{MIRROR_PREFIX}/")
+        if not self._authorize(token_required=protected):
+            return
+        if path == "/api/auth":
+            self._json({"token": ACCESS_TOKEN})
+            return
         if path == MIRROR_PREFIX or path.startswith(f"{MIRROR_PREFIX}/"):
-            self._proxy_mirror("GET")
+            self._proxy_mirror("GET", 0)
             return
         if path == "/api/status":
             payload = snapshot()
@@ -50,11 +85,15 @@ class Handler(BaseHTTPRequestHandler):
         self._file(path)
 
     def do_POST(self) -> None:
+        if not self._authorize(token_required=True):
+            return
+        length = self._request_body_length()
+        if length is None:
+            return
         path = urlparse(self.path).path
         if path == MIRROR_PREFIX or path.startswith(f"{MIRROR_PREFIX}/"):
-            self._proxy_mirror("POST")
+            self._proxy_mirror("POST", length)
             return
-        length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         try:
             payload = json.loads(raw.decode("utf-8") or "{}")
@@ -142,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _proxy_mirror(self, method: str) -> None:
+    def _proxy_mirror(self, method: str, length: int) -> None:
         target = self._mirror_upstream_path()
         upstream_path = target.split("?", 1)[0]
         is_live_stream = method == "GET" and upstream_path.endswith(".bin")
@@ -150,7 +189,6 @@ class Handler(BaseHTTPRequestHandler):
             self._proxy_mirror_stream(method, target)
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length and method in {"POST", "PUT"} else None
 
         headers: dict[str, str] = {}
